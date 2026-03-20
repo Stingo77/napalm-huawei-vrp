@@ -284,29 +284,38 @@ class VRPDriver(NetworkDriver):
         Return environment details.
         """
         environment = {}
-    
+
         # 1. Fans
         fan_cmd = "display fan"
         fan_output = self.device.send_command(fan_cmd)
         environment.setdefault("fans", {})
         for line in fan_output.split("\n"):
-            match = re.match(r"\s+(\d+).+(Normal|Abnormal).+", line)
+            # Example: " 0     1       Present   Normal    55%       Auto     Side-to-Back"
+            match = re.match(r"\s+(\d+)\s+(\d+)\s+\S+\s+(Normal|Abnormal)", line)
             if match:
                 slot = match.group(1)
-                status = True if match.group(2) == "Normal" else False
-                environment["fans"][slot] = {"status": status}
-    
+                fanid = match.group(2)
+                status = True if match.group(3) == "Normal" else False
+                key = f"Fan-{slot}-{fanid}"
+                environment["fans"][key] = {"status": status}
+
         # 2. Power supplies
         power_cmd = "display power"
         power_output = self.device.send_command(power_cmd)
         environment.setdefault("power", {})
         for line in power_output.split("\n"):
-            match = re.match(r"\s+(\d+)\s+(\w+\d+)\s+(\w+).+\s+(\w+)\s+(\d+\.\d+)", line)
+            # Example: " 0       PWR1     Present  AC     Supply     600.00"
+            match = re.match(r"\s+(\d+)\s+(\w+\d+)\s+\S+\s+\S+\s+(\w+)\s+(\d+\.\d+)", line)
             if match:
-                environment["power"][f"{match.group(2)}-{match.group(1)}"] = {
-                    "capacity": float(match.group(5)),
+                slot = match.group(1)
+                ps_id = match.group(2)
+                status = True if match.group(3) == "Supply" else False
+                capacity = float(match.group(4))
+                key = f"{ps_id}-{slot}"
+                environment["power"][key] = {
+                    "capacity": capacity,
                     "output": None,
-                    "status": True if match.group(4) == "Supply" else False,
+                    "status": status
                 }
 
         #3. Temperature (with thresholds)
