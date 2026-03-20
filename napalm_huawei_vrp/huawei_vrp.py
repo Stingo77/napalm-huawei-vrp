@@ -724,8 +724,8 @@ class VRPDriver(NetworkDriver):
         re_mac = r"Hardware address is\W+(?P<mac_address>\S+)"
         re_speed = r"^Speed\W+(?P<speed>\d+|\w+)"
         re_description = r"Description:(?:(?:)|(?P<description>.*))\n"
-        re_mtu = r"Maximum Transmit Unit(?:(?:\(L3\))|(?:)) is (?P<int_mtu>\d+)"
-
+#        re_mtu = r"Maximum Transmit Unit(?:(?:\(L3\))|(?:)) is (?P<int_mtu>\d+)"
+        re_mtu = r"(?:Maximum Transmit Unit(?:\(L3\))? is|Route Port,The MTU is)\s+(?P<int_mtu>\d+)"
         new_interfaces = self._separate_section(separator, output)
         for interface in new_interfaces:
             interface = interface.strip()
