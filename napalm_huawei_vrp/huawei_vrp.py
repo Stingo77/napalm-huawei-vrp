@@ -282,140 +282,94 @@ class VRPDriver(NetworkDriver):
     def get_environment(self):
         """
         Return environment details.
-
-        Sample output:
-        {
-            "cpu": {
-                "0": {
-                    "%usage": 18.0
-                }
-            },
-            "fans": {
-                "FAN1": {
-                    "status": true
-                }
-            },
-            "memory": {
-                "available_ram": 3884224,
-                "used_ram": 784552
-            },
-            "power": {
-                "PWR1": {
-                    "capacity": 600.0,
-                    "output": 92.0,
-                    "status": true
-                }
-            },
-            "temperature": {
-                "CPU": {
-                    "is_alert": false,
-                    "is_critical": false,
-                    "temperature": 45.0
-                }
-            }
-        }
         """
-        # 空包
         environment = {}
-        # 定义执行命令
+    
+        # 1. Fans
         fan_cmd = "display fan"
-        """
-         Slot  FanID   Online    Status    Speed     Mode     Airflow            
-        -------------------------------------------------------------------------
-         0     1       Present   Normal    55%       Auto     Side-to-Back
-         1     1       Present   Normal    55%       Auto     Side-to-Back
-        """
-        power_cmd = "display power"
-        """
-        ------------------------------------------------------------
-         Slot    PowerID  Online   Mode   State      Power(W)
-        ------------------------------------------------------------
-         0       PWR1     Present  AC     Supply     600.00     
-         0       PWR2     Present  AC     Supply     600.00     
-         1       PWR1     Present  AC     Supply     600.00     
-         1       PWR2     Present  AC     Supply     600.00  
-        """
-        temp_cmd = "display temperature all"
-        """
-        -------------------------------------------------------------------------------
-         Slot  Card  Sensor Status    Current(C) Lower(C) Lower     Upper(C) Upper
-                                                          Resume(C)          Resume(C)
-        -------------------------------------------------------------------------------
-         0     NA    NA     Normal     37        0        4         63       59
-         1     NA    NA     Normal     39        0        4         63       59
-         """
-        cpu_cmd = "display cpu-usage"
-        """
-        CPU Usage Stat. Cycle: 60 (Second)
-        CPU Usage            : 28% Max: 87%
-        CPU Usage Stat. Time : 2022-01-13  18:57:06 
-        CPU utilization for five seconds: 28%: one minute: 28%: five minutes: 20%
-        Max CPU Usage Stat. Time : 2021-10-05 17:50:44.
-        """
-        mem_cmd = "display memory-usage"
-        """
-         Memory utilization statistics at 2022-01-13 18:57:37+08:00
-         System Total Memory Is: 1598029824 bytes
-         Total Memory Used Is: 188593436 bytes
-         Memory Using Percentage Is: 11%
-        """
-        # 发送命令
         fan_output = self.device.send_command(fan_cmd)
-        power_cmd = self.device.send_command(power_cmd)
-        temp_cmd = self.device.send_command(temp_cmd)
-        cpu_cmd = self.device.send_command(cpu_cmd)
-        mem_cmd = self.device.send_command(mem_cmd)
-        # 设备风扇情况
         environment.setdefault("fans", {})
-        for i in fan_output.split("\n"):
-            match = re.match(r"\s+(\d+).+(Normal|Abnormal).+", i)
+        for line in fan_output.split("\n"):
+            match = re.match(r"\s+(\d+).+(Normal|Abnormal).+", line)
             if match:
                 slot = match.group(1)
                 status = True if match.group(2) == "Normal" else False
                 environment["fans"][slot] = {"status": status}
-
-        # 设备电源情况
+    
+        # 2. Power supplies
+        power_cmd = "display power"
+        power_output = self.device.send_command(power_cmd)
         environment.setdefault("power", {})
-        for i in power_cmd.split("\n"):
-            # match = re.match(r"\s+(\d+).+(Normal|Abnormal).+", i)
-            match = re.match(r"\s+(\d+)\s+(\w+\d+)\s+(\w+).+\s+(\w+)\s+(\d+\.\d+)", i)
+        for line in power_output.split("\n"):
+            match = re.match(r"\s+(\d+)\s+(\w+\d+)\s+(\w+).+\s+(\w+)\s+(\d+\.\d+)", line)
             if match:
                 environment["power"][f"{match.group(2)}-{match.group(1)}"] = {
                     "capacity": float(match.group(5)),
                     "output": None,
                     "status": True if match.group(4) == "Supply" else False,
                 }
-        # 设备温度情况
-        environment.setdefault("temperature", {})
-        for i in temp_cmd.split("\n"):
-            match = re.split(r"\s+", i)
-            if len(match) == 10:
-                if "Upper" not in match:
-                    environment["temperature"]["slot" + match[1]] = {
-                        "is_alert": False if match[4] == "Normal" else True,
-                        "is_critical": False if match[4] == "Normal" else True,
-                        "temperature": float(match[-1]),
-                    }
 
-        # CPU使用率
+        #3. Temperature (with thresholds)
+        temp_cmd = "display temperature all"
+        temp_output = self.device.send_command(temp_cmd)
+        environment.setdefault("temperature", {})
+
+        # Regex to parse temperature lines
+        # Expected format:
+        # Slot Card Sensor Status    Current(C) Lower(C) Lower     Upper(C) Upper
+        #                                               Resume(C)          Resume(C)
+        # 0     NA    NA     Normal            53       -3         1       68        64
+        re_temp = re.compile(
+            r"^\s*(?P<slot>\d+)\s+NA\s+NA\s+(?P<status>\S+)\s+(?P<current>-?\d+)\s+(?P<lower>-?\d+)\s+\d+\s+(?P<upper>\d+)\s+\d+",
+            re.MULTILINE
+        )
+        
+        for match in re_temp.finditer(temp_output):
+            slot = match.group("slot")
+            current = float(match.group("current"))
+            upper = float(match.group("upper"))
+            lower = float(match.group("lower"))
+        
+            is_alert = current > upper or current < lower
+            is_critical = False  # No critical threshold available
+
+            environment["temperature"][f"slot{slot}"] = {
+                "is_alert": is_alert,
+                "is_critical": is_critical,
+                "temperature": current,
+            }
+        # 4. CPU usage
+        cpu_cmd = "display cpu-usage"
+        cpu_output = self.device.send_command(cpu_cmd)
         environment.setdefault("cpu", {})
         cpu_use = re.search(
             r"CPU utilization for five seconds: \d+%: one minute: \d+%: five minutes: (\d+)%",
-            cpu_cmd,
+            cpu_output,
         )
         if cpu_use:
             environment["cpu"] = {"0": {"%usage": cpu_use.group(1)}}
         else:
             environment["cpu"] = {"0": {"%usage": -1}}
-
-        # 内存使用情况
-        environment.setdefault("memory", {})
-        memory_use = re.findall(r"(\d+) bytes", mem_cmd)
-        environment["memory"] = {
-            "available_ram": int(memory_use[0]) - int(memory_use[1]),
-            "used_ram": int(memory_use[1]),
-        }
+    
+        # 5. Memory usage
+        mem_cmd = "display memory-usage"
+        mem_output = self.device.send_command(mem_cmd)
+        memory_use = re.findall(r"(\d+) bytes", mem_output)
+        if len(memory_use) >= 2:
+            total = int(memory_use[0])
+            used = int(memory_use[1])
+            environment["memory"] = {
+                "available_ram": total - used,
+                "used_ram": used,
+            }
+        else:
+            environment["memory"] = {
+                "available_ram": -1,
+                "used_ram": -1,
+            }
+    
         return environment
+
 
     # verified
     def get_config(self, retrieve="all", full=False):
