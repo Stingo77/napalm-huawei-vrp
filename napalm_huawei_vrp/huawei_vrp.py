@@ -990,56 +990,59 @@ class VRPDriver(NetworkDriver):
         return lldp_neighbors
 
     # verified
+
     def get_arp_table(self, vrf=""):
         """
         Get arp table information.
-
-        Return a list of dictionaries having the following set of keys:
-            * interface (string)
-            * mac (string)
-            * ip (string)
-            * age (float) (not support)
-
-        Sample output:
-            [
-                {
-                    'interface' : 'MgmtEth0/RSP0/CPU0/0',
-                    'mac'       : '5c:5e:ab:da:3c:f0',
-                    'ip'        : '172.17.17.1',
-                    'age'       : -1
-                },
-                {
-                    'interface': 'MgmtEth0/RSP0/CPU0/0',
-                    'mac'       : '66:0e:94:96:e0:ff',
-                    'ip'        : '172.17.17.2',
-                    'age'       : -1
-                }
-            ]
+    
+        :param vrf: optional VRF name to filter results
+        :return: list of dictionaries with keys interface, mac, ip, age
         """
         arp_table = []
-        output = self.device.send_command("display arp all")
-        re_arp = (
-            r"(?P<ip_address>\d+\.\d+\.\d+\.\d+)\s+(?P<mac>\S+)\s+(?P<exp>\d+|)\s+"
-            r"(?P<type>I|D|S|O)\S+\s+(?P<interface>\S+)"
+        command = "display arp all"
+        output = self.device.send_command(command)
+    
+        # Regex to parse ARP entries
+        # Sample lines:
+        # 172.17.13.9     0015-5dac-0172  20        D-0         MEth0/0/1      MGMT
+        # 172.17.13.169   1ce6-39c7-4e30            I -         MEth0/0/1      MGMT
+        # 169.254.2.1     1ce6-39c7-4e30            I -         MEth0/0/2
+        re_arp = re.compile(
+            r"^\s*(?P<ip>\d+\.\d+\.\d+\.\d+)\s+(?P<mac>[0-9a-fA-F-]+)\s+(?P<exp>\d*)\s+"
+            r"(?P<type>[IDS]\S*)\s+(?P<intf>\S+)(?:\s+(?P<vrf>\S+))?\s*$",
+            re.MULTILINE
         )
-        match = re.findall(re_arp, output, flags=re.M)
-
-        for arp in match:
-            # if arp[2].isdigit():
-            #     exp = float(arp[2]) * 60
-            # else:
-            #     exp = 0
-
-            entry = {
-                "interface": arp[4],
-                "mac": pretty_mac(arp[1]),
-                "ip": arp[0],
-                "age": -1.0,
-            }
-            arp_table.append(entry)
+    
+        for match in re_arp.finditer(output):
+            ip_addr = match.group("ip")
+            mac_raw = match.group("mac")
+            exp_str = match.group("exp")
+            intf = match.group("intf")
+            entry_vrf = match.group("vrf") if match.group("vrf") else ""
+    
+            # Apply VRF filter if specified
+            if vrf and entry_vrf != vrf:
+                continue
+    
+            # Convert expiration time from minutes to seconds
+            if exp_str.isdigit():
+                age = float(exp_str) * 60.0
+            else:
+                age = -1.0
+    
+            # Format MAC address
+            mac_addr = pretty_mac(mac_raw)
+    
+            arp_table.append({
+                "interface": intf,
+                "mac": mac_addr,
+                "ip": ip_addr,
+                "age": age
+            })
+    
         return arp_table
-
-    # verified
+    
+    
     def get_mac_address_table(self):
         """
         Return the MAC address table.
