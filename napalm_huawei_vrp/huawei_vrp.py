@@ -388,7 +388,7 @@ class VRPDriver(NetworkDriver):
         # 设备温度情况
         environment.setdefault("temperature", {})
         for i in temp_cmd.split("\n"):
-            match = re.split("\s+", i)
+            match = re.split(r"\s+", i)
             if len(match) == 10:
                 if "Upper" not in match:
                     environment["temperature"]["slot" + match[1]] = {
@@ -438,21 +438,122 @@ class VRPDriver(NetworkDriver):
         return config
 
     # ok
-    def load_merge_candidate(self, filename=None, config=None):
-        """Open the candidate config and merge."""
-        if not filename and not config:
-            raise MergeConfigException("filename or config param must be provided.")
 
-        self.merge_candidate += "\n"  # insert one extra line
-        if filename is not None:
-            with open(filename, "r") as f:
-                self.merge_candidate += f.read()
-        else:
-            self.merge_candidate += config
-
-        self.replace = False
-        self.loaded = True
-
+    def get_network_instances(self, name=""):
+        """
+        Return network instances (VRFs) information.
+        """
+        network_instances = {}
+    
+        # Get VPN instances and their route distinguishers
+        cmd_vpn = "display ip vpn-instance"
+        output_vpn = self.device.send_command(cmd_vpn)
+    
+        # Regex to parse: "MGMT   65400:654000   IPv4" and "MGMT   IPv6"
+        re_vpn = re.compile(
+            r"^\s*(?P<name>\S+)\s+(?P<rd>\S*)\s+(?P<afi>IPv4|IPv6)",
+            re.MULTILINE
+        )
+    
+        vrf_data = {}
+        for match in re_vpn.finditer(output_vpn):
+            vrf_name = match.group("name")
+            rd = match.group("rd") if match.group("rd") else ""
+            afi = match.group("afi").lower()
+    
+            if vrf_name not in vrf_data:
+                vrf_data[vrf_name] = {"rd": "", "address_families": {}, "interfaces": []}
+            if rd:
+                vrf_data[vrf_name]["rd"] = rd
+            vrf_data[vrf_name]["address_families"][afi] = {"route_distinguisher": rd}
+    
+        # Get interfaces bound to each VPN instance (line-by-line parsing)
+        cmd_if = "display ip vpn-instance interface"
+        output_if = self.device.send_command(cmd_if)
+    
+        lines = output_if.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("VPN-Instance Name and ID"):
+                # Extract VRF name
+                parts = line.split(",")
+                if len(parts) >= 1:
+                    vrf_name = parts[0].split(":")[1].strip()
+                else:
+                    vrf_name = ""
+                i += 1
+                # Skip empty lines
+                while i < len(lines) and lines[i].strip() == "":
+                    i += 1
+                # Look for "Interface Number" line
+                if i < len(lines) and "Interface Number" in lines[i]:
+                    i += 1
+                    while i < len(lines) and lines[i].strip() == "":
+                        i += 1
+                    # Look for "Interface list" line
+                    interfaces = []
+                    if i < len(lines) and "Interface list" in lines[i]:
+                        intf_str = lines[i].split(":")[1].strip()
+                        if intf_str:
+                            interfaces = [intf.strip() for intf in intf_str.split(",")]
+                        i += 1
+                    # Store
+                    if vrf_name in vrf_data:
+                        vrf_data[vrf_name]["interfaces"] = interfaces
+                    else:
+                        vrf_data[vrf_name] = {
+                            "rd": "",
+                            "interfaces": interfaces,
+                            "address_families": {}
+                        }
+                else:
+                    # No interface info for this VRF
+                    if vrf_name not in vrf_data:
+                        vrf_data[vrf_name] = {
+                            "rd": "",
+                            "interfaces": [],
+                            "address_families": {}
+                        }
+            else:
+                i += 1
+    
+        # Build final output in NAPALM format
+        for vrf_name, data in vrf_data.items():
+            network_instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {
+                    "route_distinguisher": data.get("rd", "")
+                },
+                "interfaces": {
+                    "interface": {
+                        intf: {}
+                        for intf in data.get("interfaces", [])
+                    }
+                },
+                "address_families": data.get("address_families", {})
+            }
+    
+        # Add default instance (global routing table) if not present
+        if "default" not in network_instances:
+            network_instances["default"] = {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {
+                    "route_distinguisher": None
+                },
+                "interfaces": {
+                    "interface": {}
+                },
+                "address_families": {}
+            }
+    
+        # If a specific instance name is requested, return only that
+        if name:
+            return {name: network_instances.get(name, {})}
+        return network_instances
+    
     # developing
     def load_replace_candidate(self, filename=None, config=None):
         """Open the candidate config and replace."""
@@ -1703,10 +1804,6 @@ class VRPDriver(NetworkDriver):
 
     # develop
     def get_bgp_config(self):
-        pass
-
-    # develop
-    def get_network_instances(self):
         pass
 
     # to verify
