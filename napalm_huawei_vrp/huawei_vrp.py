@@ -976,19 +976,118 @@ class VRPDriver(NetworkDriver):
             results[local_intf].append(neighbor_dict)
         return results
 
-    # develop
     def get_lldp_neighbors_detail(self, interface=""):
-        pass
         """
-        Return a detailed view of the LLDP neighbors as a dictionary.
-
-        Sample output:
-        {
-        }
+        Return a detailed view of the LLDP neighbors as a dictionary
+        containing lists of dictionaries for each interface.
+    
+        :param interface: optional interface name to filter results
+        :return: dict with interface as key and list of neighbor dicts as value
         """
-        lldp_neighbors = {}
-        return lldp_neighbors
+        command = "display lldp neighbor"
+        output = self.device.send_command(command)
+    
+        # Split output into per-interface sections
+        re_intf_header = re.compile(r"^(?P<intf>\S+) has \d+ neighbor\(s\):$", re.MULTILINE)
+        sections = []
+        last_pos = 0
+        prev_intf = None
+        for match in re_intf_header.finditer(output):
+            start = match.start()
+            if last_pos > 0:
+                sections.append((prev_intf, output[last_pos:start]))
+            prev_intf = match.group("intf")
+            last_pos = start
+        if last_pos > 0:
+            sections.append((prev_intf, output[last_pos:]))
+    
+        result = {}
+    
+        for intf_name, intf_block in sections:
+            if interface and intf_name != interface:
+                continue
+    
+            # Split into neighbor blocks (each starts with "Neighbor index :")
+            neighbor_blocks = re.split(r"\nNeighbor index :\d+\n", intf_block)
+            neighbors = []
+            for block in neighbor_blocks:
+                # Skip empty blocks or blocks that don't contain real neighbor data
+                if not block.strip():
+                    continue
+                # Quick check: must have at least one key field
+                if not re.search(r"Chassis ID|Port ID|System name", block):
+                    continue
+    
+                neighbor = {
+                    "parent_interface": "",
+                    "remote_port": "",
+                    "remote_port_description": "",
+                    "remote_chassis_id": "",
+                    "remote_system_name": "",
+                    "remote_system_description": "",
+                    "remote_system_capab": [],
+                    "remote_system_enabled_capab": [],
+                }
+    
+                # Chassis ID
+                match = re.search(r"Chassis ID\s*:\s*(?P<chassis>.+)", block)
+                if match:
+                    neighbor["remote_chassis_id"] = match.group("chassis").strip()
+    
+                # Port ID
+                match = re.search(r"Port ID\s*:\s*(?P<port>.+)", block)
+                if match:
+                    neighbor["remote_port"] = match.group("port").strip()
+    
+                # Port description
+                match = re.search(r"Port description\s*:\s*(?P<desc>.+)", block)
+                if match:
+                    neighbor["remote_port_description"] = match.group("desc").strip()
+    
+                # System name
+                match = re.search(r"System name\s*:\s*(?P<name>.+)", block)
+                if match:
+                    neighbor["remote_system_name"] = match.group("name").strip()
+    
+                # System description (multi-line)
+                desc_lines = []
+                in_desc = False
+                for line in block.splitlines():
+                    if "System description" in line:
+                        in_desc = True
+                        if ":" in line:
+                            desc_part = line.split(":", 1)[1].strip()
+                            if desc_part:
+                                desc_lines.append(desc_part)
+                    elif in_desc:
+                        # Stop when we hit a new field with colon
+                        if re.match(r"^[A-Za-z ]+\s*:", line):
+                            in_desc = False
+                        else:
+                            desc_lines.append(line.strip())
+                if desc_lines:
+                    neighbor["remote_system_description"] = "\n".join(desc_lines)
+    
+                # Capabilities supported
+                match = re.search(r"System capabilities supported\s*:\s*(?P<capab>.+)", block)
+                if match:
+                    capab_str = match.group(1).strip()
+                    neighbor["remote_system_capab"] = capab_str.split()
+    
+                # Capabilities enabled
+                match = re.search(r"System capabilities enabled\s*:\s*(?P<enabled>.+)", block)
+                if match:
+                    enabled_str = match.group(1).strip()
+                    neighbor["remote_system_enabled_capab"] = enabled_str.split()
+    
+                neighbors.append(neighbor)
+    
+            if neighbors:
+                result[intf_name] = neighbors
+    
+        return result
 
+    
     # verified
 
     def get_arp_table(self, vrf=""):
@@ -1004,9 +1103,9 @@ class VRPDriver(NetworkDriver):
     
         # Regex to parse ARP entries
         # Sample lines:
-        # 172.17.13.9     0015-5dac-0172  20        D-0         MEth0/0/1      MGMT
-        # 172.17.13.169   1ce6-39c7-4e30            I -         MEth0/0/1      MGMT
-        # 169.254.2.1     1ce6-39c7-4e30            I -         MEth0/0/2
+        # 172.16.1.9     0015-5dac-0172  20        D-0         MEth0/0/1      MGMT
+        # 172.16.1.169   1c36-34c9-4e30            I -         MEth0/0/1      MGMT
+        # 169.254.2.1    1c36-34c9-4e30            I -         MEth0/0/2
         re_arp = re.compile(
             r"^\s*(?P<ip>\d+\.\d+\.\d+\.\d+)\s+(?P<mac>[0-9a-fA-F-]+)\s+(?P<exp>\d*)\s+"
             r"(?P<type>[IDS]\S*)\s+(?P<intf>\S+)(?:\s+(?P<vrf>\S+))?\s*$",

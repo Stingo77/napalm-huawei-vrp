@@ -36,7 +36,8 @@ The driver is under development and iteration.
 |  get_interfaces_ip()        |  Get interface IP information  |
 |  get_interfaces_counters()  |  Get interface counters  |
 |  get_lldp_neighbors()       |  Fetch LLDP neighbor information |
-|  get_network_instances()    |  Return network instances (VRFs) information
+|  get_lldp_neighbors_detail) |  Fetch detailed view of the LLDP neighbor |
+|  get_network_instances()    |  Return network instances (VRFs) information |
 
 ### Config
 
@@ -62,7 +63,6 @@ The driver is under development and iteration.
 * get_bgp_neighbors
 * get_bgp_neighbors_detail
 * get_ipv6_neighbors_table
-* get_lldp_neighbors_detail
 * get_network_instances
 * get_ntp_peers
 * get_ntp_servers
