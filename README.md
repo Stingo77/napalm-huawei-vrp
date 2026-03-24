@@ -38,6 +38,7 @@ The driver is under development and iteration.
 |  get_lldp_neighbors()       |  Fetch LLDP neighbor information |
 |  get_lldp_neighbors_detail) |  Fetch detailed view of the LLDP neighbor |
 |  get_network_instances()    |  Return network instances (VRFs) information |
+|  get_vlans()                |  Return VLANs information |
 
 ### Config
 
@@ -56,14 +57,15 @@ The driver is under development and iteration.
 |  is_active()                |  get devices active status  |
 |  ping()                     |  Ping remote ip  |
 
+### Custom methods
+| API   | Description  |
+|--------|-----|
+| get_inventory() | Return hardware inventory details |
 
 ### Plans to develop
 
 * get_bgp_config
-* get_bgp_neighbors
-* get_bgp_neighbors_detail
 * get_ipv6_neighbors_table
-* get_network_instances
 * get_ntp_peers
 * get_ntp_servers
 * get_ntp_stats
@@ -71,7 +73,6 @@ The driver is under development and iteration.
 * get_route_to
 * get_snmp_information
 * get_users
-* get_vlans
 
 
 ## How to Install
