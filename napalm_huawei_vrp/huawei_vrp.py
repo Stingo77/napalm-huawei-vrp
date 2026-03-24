@@ -13,6 +13,9 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+__version__ = "1.4.0"
+__date__ = "2026-03-24"
+
 """
 NAPALM Driver for Huawei VRP5/VRP8 Routers and Switches.
 Author: Locus Li (locus@byto.top)
@@ -49,7 +52,7 @@ from napalm.base.exceptions import (
     CommandErrorException,
     CommitError,
 )
-from .utils.utils import pretty_mac, SafeList
+from .utils.utils import pretty_mac, SafeList, expand_interface
 
 # Easier to store these as constants
 HOUR_SECONDS = 3600
@@ -2084,64 +2087,97 @@ class VRPDriver(NetworkDriver):
 
         return local_users
 
-    # developing
     def get_vlans(self):
-        pass
         """
-        {
-            "1": {
-                "name": "default",
-                "interfaces": [
-                    "GigabitEthernet0/9",
-                    "GigabitEthernet0/12",
-                    "GigabitEthernet0/22",
-                    "GigabitEthernet0/25",
-                    "TenGigabitEthernet0/1",
-                    "TenGigabitEthernet0/2"
-                ]
-            },
-            "603": {
-                "name": "Kuku",
-                "interfaces": [
-                    "GigabitEthernet0/10"
-                ]
-            "800": {
-                "name": "coopero",
-                "interfaces": [
-                    "GigabitEthernet0/19"
-                ]
+        Return a dictionary of VLANs with their names and member interfaces.
+        """
+        from napalm_huawei_vrp.utils import expand_interface
+    
+        output = self.device.send_command("display vlan")
+        # DEBUG
+        # print("=== FULL OUTPUT ===\n", output)
+    
+        # Find the start of the second table (descriptions)
+        desc_marker = "VID  Status  Property"
+        desc_pos = output.find(desc_marker)
+        if desc_pos == -1:
+            # fallback: use whole output for ports, and no descriptions
+            ports_section = output
+            desc_section = ""
+        else:
+            # split at the marker line
+            ports_section = output[:desc_pos]
+            desc_section = output[desc_pos:]
+    
+        # DEBUG
+        # print("=== PORTS SECTION ===\n", ports_section)
+    
+        # Parse ports table
+        current_vid = None
+        current_ports = []
+        vlans = {}
+    
+        for line in ports_section.splitlines():
+            line = line.rstrip()
+            # Skip empty lines, header lines, etc.
+            if not line or line.startswith("The total number") or line.startswith("U:"):
+                continue
+            # Try to match a line that starts with a VLAN ID (digits) and then "common"
+            match = re.match(r"^\s*(\d+)\s+common\s+(.*)$", line)
+            if match:
+                # Save previous VLAN if exists
+                if current_vid is not None:
+                    vlans[current_vid] = {"interfaces": current_ports, "name": ""}
+                current_vid = int(match.group(1))
+                current_ports = []
+                # Process ports on this line
+                rest = match.group(2).strip()
+                if rest:
+                    for token in rest.split():
+                        # Remove (D), (U) and prefixes UT:, TG:
+                        if '(' in token:
+                            token = token.split('(')[0]
+                        if token.startswith("UT:") or token.startswith("TG:"):
+                            token = token[3:]
+                        if token and token != "-":
+                            current_ports.append(token)
+            else:
+                # Continuation line (no VLAN ID, only ports indented)
+                if current_vid is not None:
+                    # line may contain ports with leading spaces
+                    for token in line.split():
+                        if '(' in token:
+                            token = token.split('(')[0]
+                        if token.startswith("UT:") or token.startswith("TG:"):
+                            token = token[3:]
+                        if token and token != "-" and '/' in token:
+                            current_ports.append(token)
+        # Save last VLAN
+        if current_vid is not None:
+            vlans[current_vid] = {"interfaces": current_ports, "name": ""}
+    
+        # Parse description table
+        # We look for lines like: "1    enable  default       enable  disable    VLAN 0001"
+        for line in desc_section.splitlines():
+            match = re.match(r"^\s*(\d+)\s+\S+\s+\S+\s+\S+\s+\S+\s+(.*)$", line)
+            if match:
+                vid = int(match.group(1))
+                desc = match.group(2).strip()
+                if vid in vlans:
+                    vlans[vid]["name"] = desc
+                else:
+                    vlans[vid] = {"interfaces": [], "name": desc}
+    
+        # Expand interface names
+        final_vlans = {}
+        for vid, data in vlans.items():
+            expanded = [expand_interface(intf) for intf in data["interfaces"]]
+            final_vlans[vid] = {
+                "name": data["name"],
+                "interfaces": expanded
             }
-        }
-        """
-
-    @staticmethod
-    def _separate_section(separator, content):
-        if content == "":
-            return []
-
-        # Break output into per-interface sections
-        interface_lines = re.split(separator, content, flags=re.M)
-
-        if len(interface_lines) == 1:
-            msg = "Unexpected output data:\n{}".format(interface_lines)
-            raise ValueError(msg)
-
-        # Get rid of the blank data at the beginning
-        interface_lines.pop(0)
-
-        # Must be pairs of data (the separator and section corresponding to it)
-        if len(interface_lines) % 2 != 0:
-            msg = "Unexpected output data:\n{}".format(interface_lines)
-            raise ValueError(msg)
-
-        # Combine the separator and section into one string
-        intf_iter = iter(interface_lines)
-
-        try:
-            new_interfaces = [line + next(intf_iter, "") for line in intf_iter]
-        except TypeError:
-            raise ValueError()
-        return new_interfaces
+    
+        return final_vlans
 
     def _delete_file(self, filename):
         command = "delete /unreserved /quiet {0}".format(filename)
@@ -2447,3 +2483,19 @@ class VRPDriver(NetworkDriver):
                 bandwidth
             )
         )
+
+    def get_inventory(self):
+        """
+        Return hardware inventory details.
+            """
+        from napalm_huawei_vrp.inventory import parse_inventory
+    
+        # Disable paging
+        self.device.send_command("screen-length 0 temporary", expect_string=r"[>#]")
+        # Send command and answer Y when prompted
+        output = self.device.send_command("display elabel", expect_string=r"Continue\? \[Y/N\]:")
+        output += self.device.send_command("Y", expect_string=r"[>#]", read_timeout=120)
+        # Restore paging
+        self.device.send_command("screen-length 24", expect_string=r"[>#]")
+
+        return parse_inventory(output)
