@@ -2483,6 +2483,29 @@ class VRPDriver(NetworkDriver):
                 bandwidth
             )
         )
+    @staticmethod
+    def _separate_section(separator, content):
+        """Break output into per-interface sections."""
+        if content == "":
+            return []
+        # Break output into per-interface sections
+        interface_lines = re.split(separator, content, flags=re.M)
+        if len(interface_lines) == 1:
+            msg = "Unexpected output data:\n{}".format(interface_lines)
+            raise ValueError(msg)
+        # Get rid of the blank data at the beginning
+        interface_lines.pop(0)
+        # Must be pairs of data (the separator and section corresponding to it)
+        if len(interface_lines) % 2 != 0:
+            msg = "Unexpected output data:\n{}".format(interface_lines)
+            raise ValueError(msg)
+        # Combine the separator and section into one string
+        intf_iter = iter(interface_lines)
+        try:
+            new_interfaces = [line + next(intf_iter, "") for line in intf_iter]
+        except TypeError:
+            raise ValueError()
+        return new_interfaces
 
     def get_inventory(self):
         """
