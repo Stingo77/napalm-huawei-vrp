@@ -60,7 +60,7 @@ The driver is under development and iteration.
 ### Custom methods
 | API   | Description  |
 |--------|-----|
-| get_inventory() | Return hardware inventory details |
+|get_inventory() | Return hardware inventory details. [Details](inventory.md)
 
 ### Plans to develop
 
