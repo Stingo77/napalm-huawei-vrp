@@ -42,6 +42,7 @@ import hashlib
 from napalm.base.helpers import mac
 import napalm.base.constants as C
 
+from netmiko.exceptions import ReadTimeout
 from datetime import datetime
 from diffplus import IndentedConfig, IncrementalDiff
 from napalm.base import NetworkDriver
@@ -2510,15 +2511,21 @@ class VRPDriver(NetworkDriver):
     def get_inventory(self):
         """
         Return hardware inventory details.
-            """
+        """
         from napalm_huawei_vrp.inventory import parse_inventory
     
         # Disable paging
         self.device.send_command("screen-length 0 temporary", expect_string=r"[>#]")
-        # Send command and answer Y when prompted
-        output = self.device.send_command("display elabel", expect_string=r"Continue\? \[Y/N\]:")
-        output += self.device.send_command("Y", expect_string=r"[>#]", read_timeout=120)
+        
+        # Try with confirmation prompt
+        try:
+            output = self.device.send_command("display elabel", expect_string=r"Continue\? \[Y/N\]", read_timeout=10)
+            output += self.device.send_command("Y", expect_string=r"[>#]", read_timeout=120)
+        except ReadTimeout:
+            # No confirmation prompt, get output directly
+            output = self.device.send_command("display elabel", expect_string=r"[>#]", read_timeout=120)
+        
         # Restore paging
         self.device.send_command("screen-length 24", expect_string=r"[>#]")
-
+        
         return parse_inventory(output)
